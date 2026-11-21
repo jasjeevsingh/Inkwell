@@ -39,6 +39,7 @@ enum Prefs {
     static let splitRatio = "splitRatio"
     static let showSidebar = "showSidebar"
     static let openInTabs = "openInTabs"
+    static let editablePreview = "editablePreview"
 }
 
 enum Appearance {
@@ -84,9 +85,25 @@ struct InkwellCommands: Commands {
     @AppStorage(Prefs.zoom) private var zoom = 1.0
     @AppStorage(Prefs.syncScroll) private var syncScroll = true
 
-    private var editing: Bool { model != nil && model?.mode != .preview }
-
     var body: some Commands {
+        // SwiftUI's document apps ship without a Find menu, so ⌘F needs to be wired up here.
+        CommandGroup(after: .pasteboard) {
+            Divider()
+            Menu("Find") {
+                Button("Find…") { model?.find(.show) }
+                    .keyboardShortcut("f")
+                Button("Find and Replace…") { model?.find(.replace) }
+                    .keyboardShortcut("f", modifiers: [.command, .option])
+                Button("Find Next") { model?.find(.next) }
+                    .keyboardShortcut("g")
+                Button("Find Previous") { model?.find(.previous) }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                Button("Use Selection for Find") { model?.find(.useSelection) }
+                    .keyboardShortcut("e")
+            }
+            .disabled(model == nil)
+        }
+
         CommandGroup(after: .newItem) {
             Button("New File in Folder…") { model?.workspace.beginNewFile() }
                 .keyboardShortcut("n", modifiers: [.command, .option])
@@ -161,42 +178,42 @@ struct InkwellCommands: Commands {
         }
 
         CommandMenu("Format") {
-            Button("Bold") { model?.format { EditorActions.toggleWrap($0, "**") } }
+            Button("Bold") { model?.format(.bold) { EditorActions.toggleWrap($0, "**") } }
                 .keyboardShortcut("b")
-            Button("Italic") { model?.format { EditorActions.toggleWrap($0, "*") } }
+            Button("Italic") { model?.format(.italic) { EditorActions.toggleWrap($0, "*") } }
                 .keyboardShortcut("i")
-            Button("Strikethrough") { model?.format { EditorActions.toggleWrap($0, "~~") } }
+            Button("Strikethrough") { model?.format(.strike) { EditorActions.toggleWrap($0, "~~") } }
                 .keyboardShortcut("x", modifiers: [.command, .shift])
-            Button("Highlight") { model?.format { EditorActions.toggleWrap($0, "==") } }
+            Button("Highlight") { model?.format(.highlight) { EditorActions.toggleWrap($0, "==") } }
                 .keyboardShortcut("h", modifiers: [.command, .shift])
-            Button("Inline Code") { model?.format { EditorActions.toggleWrap($0, "`", placeholder: "code") } }
+            Button("Inline Code") { model?.format(.code) { EditorActions.toggleWrap($0, "`", placeholder: "code") } }
                 .keyboardShortcut("`", modifiers: .control)
-            Button("Link") { model?.format { EditorActions.link($0) } }
+            Button("Link") { model?.format(.link) { EditorActions.link($0) } }
                 .keyboardShortcut("k")
-            Button("Image") { model?.format { EditorActions.link($0, image: true) } }
+            Button("Image") { model?.format(.image) { EditorActions.link($0, image: true) } }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
             Divider()
-            Button("Paragraph") { model?.format { EditorActions.setHeading($0, level: 0) } }
+            Button("Paragraph") { model?.format(.heading(0)) { EditorActions.setHeading($0, level: 0) } }
                 .keyboardShortcut("0", modifiers: [.command, .option])
             ForEach(1...6, id: \.self) { level in
-                Button("Heading \(level)") { model?.format { EditorActions.setHeading($0, level: level) } }
+                Button("Heading \(level)") { model?.format(.heading(level)) { EditorActions.setHeading($0, level: level) } }
                     .keyboardShortcut(KeyEquivalent(Character("\(level)")), modifiers: [.command, .option])
             }
             Divider()
-            Button("Bulleted List") { model?.format { EditorActions.toggleLinePrefix($0, .bullet) } }
+            Button("Bulleted List") { model?.format(.bulletList) { EditorActions.toggleLinePrefix($0, .bullet) } }
                 .keyboardShortcut("8", modifiers: [.command, .shift])
-            Button("Numbered List") { model?.format { EditorActions.toggleLinePrefix($0, .numbered) } }
+            Button("Numbered List") { model?.format(.numberedList) { EditorActions.toggleLinePrefix($0, .numbered) } }
                 .keyboardShortcut("7", modifiers: [.command, .shift])
-            Button("Task List") { model?.format { EditorActions.toggleLinePrefix($0, .task) } }
+            Button("Task List") { model?.format(.taskList) { EditorActions.toggleLinePrefix($0, .task) } }
                 .keyboardShortcut("9", modifiers: [.command, .shift])
-            Button("Quote") { model?.format { EditorActions.toggleLinePrefix($0, .quote) } }
+            Button("Quote") { model?.format(.quote) { EditorActions.toggleLinePrefix($0, .quote) } }
                 .keyboardShortcut("'", modifiers: [.command, .shift])
             Divider()
-            Button("Code Block") { model?.format(EditorActions.codeBlock) }
+            Button("Code Block") { model?.format(.codeBlock, EditorActions.codeBlock) }
                 .keyboardShortcut("c", modifiers: [.command, .option])
-            Button("Table") { model?.format(EditorActions.table) }
+            Button("Table") { model?.format(.table, EditorActions.table) }
                 .keyboardShortcut("t", modifiers: [.command, .option])
-            Button("Horizontal Rule") { model?.format(EditorActions.horizontalRule) }
+            Button("Horizontal Rule") { model?.format(.horizontalRule, EditorActions.horizontalRule) }
                 .keyboardShortcut("-", modifiers: [.command, .option])
         }
     }

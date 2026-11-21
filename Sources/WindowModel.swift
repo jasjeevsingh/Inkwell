@@ -41,6 +41,7 @@ final class WindowModel: ObservableObject {
     let editor = EditorController()
     let preview = PreviewController()
     let workspace = WorkspaceModel()
+    let previewFind = PreviewFind()
 
     var fileURL: URL? {
         didSet {
@@ -64,6 +65,7 @@ final class WindowModel: ObservableObject {
 
     init() {
         preview.model = self
+        previewFind.controller = preview
         workspace.hostWindow = { [weak self] in self?.window }
     }
 
@@ -179,7 +181,8 @@ final class WindowModel: ObservableObject {
     // MARK: Scrolling
 
     func editorDidScroll(charIndex: Int, fraction: Double, atBottom: Bool, atTop: Bool) {
-        guard syncScroll, mode == .split else { return }
+        // While the user types in the preview, the editor follows along; don't scroll the preview back.
+        guard syncScroll, mode == .split, !previewHasFocus else { return }
         let line = Double(MarkdownScan.line(for: charIndex, in: lineStarts)) + fraction
         preview.syncScroll(topLine: atTop ? 0 : line, totalLines: lineStarts.count,
                            headingLines: headings.map(\.line), atBottom: atBottom && !atTop)
@@ -208,10 +211,131 @@ final class WindowModel: ObservableObject {
 
     // MARK: Editing
 
-    func format(_ action: (NSTextView) -> Void) {
+    /// Whether keyboard focus is in the preview pane.
+    var previewHasFocus: Bool {
+        guard let responder = window?.firstResponder as? NSView else { return false }
+        return responder === preview.webView || responder.isDescendant(of: preview.webView)
+    }
+
+    /// Formatting goes to whichever pane is being edited: the preview when it has focus (or is the
+    /// only pane showing), otherwise the Markdown editor.
+    var formatsPreview: Bool {
+        preview.isEditable && (mode == .preview || (mode == .split && previewHasFocus))
+    }
+
+    var canFormat: Bool { mode != .preview || preview.isEditable }
+
+    func format(_ command: PreviewCommand? = nil, _ action: (NSTextView) -> Void) {
+        if formatsPreview {
+            if let command { formatPreview(command) }
+            return
+        }
         guard mode != .preview, let tv = editor.textView else { return }
         tv.window?.makeFirstResponder(tv)
         action(tv)
+    }
+
+    private func formatPreview(_ command: PreviewCommand) {
+        switch command {
+        case .link, .image:
+            let image: Bool = if case .image = command { true } else { false }
+            Task {
+                let selected = await preview.saveSelection() ?? ""
+                guard let url = await promptForURL(image: image, selected: selected) else { return }
+                window?.makeFirstResponder(preview.webView)
+                preview.run(command, argument: url)
+            }
+        default:
+            window?.makeFirstResponder(preview.webView)
+            preview.run(command)
+        }
+    }
+
+    private func promptForURL(image: Bool, selected: String) async -> String? {
+        let alert = NSAlert()
+        alert.messageText = image ? "Insert Image" : "Insert Link"
+        alert.informativeText = image ? "Enter the image's URL or a path relative to this document."
+            : "Enter the address to link to."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.placeholderString = image ? "image.png" : "https://"
+        let clip = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if clip.range(of: #"^https?://\S+$"#, options: .regularExpression) != nil {
+            field.stringValue = clip
+        } else if selected.range(of: #"^https?://\S+$"#, options: .regularExpression) != nil {
+            field.stringValue = selected
+        }
+        alert.accessoryView = field
+        alert.addButton(withTitle: image ? "Insert" : "Add Link")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        let response: NSApplication.ModalResponse
+        if let window {
+            response = await alert.beginSheetModal(for: window)
+        } else {
+            response = alert.runModal()
+        }
+        let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return response == .alertFirstButtonReturn && !value.isEmpty ? value : nil
+    }
+
+    /// Applies Markdown produced by editing the preview, as one undoable change to the editor.
+    func applyPreviewEdit(_ newText: String) {
+        preview.markRendered(newText, base: baseURL)
+        guard let tv = editor.textView else { return }
+        let old = tv.string as NSString
+        let new = newText as NSString
+        guard !old.isEqual(to: newText) else { return }
+        let shorter = min(old.length, new.length)
+        var prefix = 0
+        while prefix < shorter, old.character(at: prefix) == new.character(at: prefix) { prefix += 1 }
+        var suffix = 0
+        while suffix < shorter - prefix,
+              old.character(at: old.length - 1 - suffix) == new.character(at: new.length - 1 - suffix) { suffix += 1 }
+        let range = NSRange(location: prefix, length: old.length - prefix - suffix)
+        let replacement = new.substring(with: NSRange(location: prefix, length: new.length - prefix - suffix))
+        EditorActions.replace(tv, range, with: replacement, select: nil, scroll: false)
+        if mode == .split {
+            tv.scrollRangeToVisible(NSRange(location: prefix, length: (replacement as NSString).length))
+        }
+    }
+
+    // MARK: Find
+
+    enum FindAction {
+        case show, replace, next, previous, useSelection
+    }
+
+    /// ⌘F and friends: the editor uses AppKit's find bar, the preview gets its own.
+    func find(_ action: FindAction) {
+        let inPreview = mode == .preview || (mode == .split && (previewHasFocus || previewFind.isActive && !editorHasFocus))
+        if action == .replace {
+            if mode == .preview { mode = .split }
+            editor.performFind(.showReplaceInterface)
+            return
+        }
+        if inPreview {
+            switch action {
+            case .show: previewFind.show()
+            case .next: previewFind.next(backwards: false)
+            case .previous: previewFind.next(backwards: true)
+            case .useSelection: previewFind.useSelection()
+            case .replace: break
+            }
+            return
+        }
+        previewFind.close(refocus: false)
+        switch action {
+        case .show: editor.performFind(.showFindInterface)
+        case .next: editor.performFind(.nextMatch)
+        case .previous: editor.performFind(.previousMatch)
+        case .useSelection: editor.performFind(.setSearchString)
+        case .replace: break
+        }
+    }
+
+    private var editorHasFocus: Bool {
+        guard let tv = editor.textView else { return false }
+        return window?.firstResponder === tv
     }
 
     func toggleTask(index: Int) {

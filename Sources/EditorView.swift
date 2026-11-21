@@ -94,6 +94,14 @@ final class EditorController {
         tv.window?.makeFirstResponder(tv)
     }
 
+    func performFind(_ action: NSTextFinder.Action) {
+        guard let tv = textView else { return }
+        tv.window?.makeFirstResponder(tv)
+        let item = NSMenuItem()
+        item.tag = action.rawValue
+        tv.performTextFinderAction(item)
+    }
+
     func scrollToLine(_ line: Int) {
         guard let tv = textView, let lm = tv.layoutManager, let tc = tv.textContainer,
               let scroll = tv.enclosingScrollView else { return }

@@ -19,13 +19,15 @@ struct DocumentView: View {
     @AppStorage(Prefs.zoom) private var zoom = 1.0
     @AppStorage(Prefs.splitRatio) private var splitRatio = 0.5
     @AppStorage(Prefs.showSidebar) private var showSidebar = true
+    @AppStorage(Prefs.editablePreview) private var editablePreview = true
 
     private var theme: EditorTheme {
         EditorTheme(style: EditorFontStyle(rawValue: editorFont) ?? .mono, size: CGFloat(editorFontSize * zoom))
     }
 
     private var previewOptions: PreviewOptions {
-        PreviewOptions(font: previewFont, fontSize: previewFontSize * zoom, width: previewWidth)
+        PreviewOptions(font: previewFont, fontSize: previewFontSize * zoom, width: previewWidth,
+                       editable: editablePreview)
     }
 
     var body: some View {
@@ -38,7 +40,7 @@ struct DocumentView: View {
                     EditorView(text: $document.text, model: model, theme: theme,
                                readableWidth: readableWidth, spellCheck: spellCheck)
                 } right: {
-                    PreviewView(controller: model.preview)
+                    PreviewPane(model: model, find: model.previewFind)
                 }
                 StatusBar(stats: model.stats, cursor: model.cursor, mode: model.mode)
             }
@@ -62,6 +64,20 @@ struct DocumentView: View {
         .onChange(of: fileURL) { _, url in model.fileURL = url }
         .onChange(of: previewOptions) { _, options in model.preview.setOptions(options) }
         .onChange(of: syncScroll) { _, value in model.syncScroll = value }
+    }
+}
+
+// MARK: - Preview pane
+
+struct PreviewPane: View {
+    let model: WindowModel
+    @ObservedObject var find: PreviewFind
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if find.visible { PreviewFindBar(find: find) }
+            PreviewView(controller: model.preview)
+        }
     }
 }
 
@@ -224,51 +240,51 @@ struct DocumentToolbar: ToolbarContent {
         }
 
         ToolbarItemGroup(placement: .primaryAction) {
-            formattingControls.disabled(model.mode == .preview)
+            formattingControls.disabled(!model.canFormat)
         }
     }
 
     @ViewBuilder
     private var formattingControls: some View {
             Menu {
-                Button("Paragraph") { model.format { EditorActions.setHeading($0, level: 0) } }
+                Button("Paragraph") { model.format(.heading(0)) { EditorActions.setHeading($0, level: 0) } }
                 Divider()
                 ForEach(1...6, id: \.self) { level in
-                    Button("Heading \(level)") { model.format { EditorActions.setHeading($0, level: level) } }
+                    Button("Heading \(level)") { model.format(.heading(level)) { EditorActions.setHeading($0, level: level) } }
                 }
             } label: {
                 Label("Heading", systemImage: "textformat.size")
             }
             .help("Heading")
 
-            Button { model.format { EditorActions.toggleWrap($0, "**") } } label: { Label("Bold", systemImage: "bold") }
+            Button { model.format(.bold) { EditorActions.toggleWrap($0, "**") } } label: { Label("Bold", systemImage: "bold") }
                 .help("Bold ⌘B")
-            Button { model.format { EditorActions.toggleWrap($0, "*") } } label: { Label("Italic", systemImage: "italic") }
+            Button { model.format(.italic) { EditorActions.toggleWrap($0, "*") } } label: { Label("Italic", systemImage: "italic") }
                 .help("Italic ⌘I")
-            Button { model.format { EditorActions.toggleWrap($0, "~~") } } label: { Label("Strikethrough", systemImage: "strikethrough") }
+            Button { model.format(.strike) { EditorActions.toggleWrap($0, "~~") } } label: { Label("Strikethrough", systemImage: "strikethrough") }
                 .help("Strikethrough ⇧⌘X")
-            Button { model.format { EditorActions.toggleWrap($0, "`", placeholder: "code") } } label: {
+            Button { model.format(.code) { EditorActions.toggleWrap($0, "`", placeholder: "code") } } label: {
                 Label("Code", systemImage: "chevron.left.forwardslash.chevron.right")
             }
             .help("Inline code ⌃`")
-            Button { model.format { EditorActions.link($0) } } label: { Label("Link", systemImage: "link") }
+            Button { model.format(.link) { EditorActions.link($0) } } label: { Label("Link", systemImage: "link") }
                 .help("Link ⌘K")
 
             Menu {
-                Button("Bulleted List", systemImage: "list.bullet") { model.format { EditorActions.toggleLinePrefix($0, .bullet) } }
-                Button("Numbered List", systemImage: "list.number") { model.format { EditorActions.toggleLinePrefix($0, .numbered) } }
-                Button("Task List", systemImage: "checklist") { model.format { EditorActions.toggleLinePrefix($0, .task) } }
-                Button("Quote", systemImage: "text.quote") { model.format { EditorActions.toggleLinePrefix($0, .quote) } }
+                Button("Bulleted List", systemImage: "list.bullet") { model.format(.bulletList) { EditorActions.toggleLinePrefix($0, .bullet) } }
+                Button("Numbered List", systemImage: "list.number") { model.format(.numberedList) { EditorActions.toggleLinePrefix($0, .numbered) } }
+                Button("Task List", systemImage: "checklist") { model.format(.taskList) { EditorActions.toggleLinePrefix($0, .task) } }
+                Button("Quote", systemImage: "text.quote") { model.format(.quote) { EditorActions.toggleLinePrefix($0, .quote) } }
             } label: {
                 Label("Lists", systemImage: "list.bullet")
             }
             .help("Lists and quotes")
 
             Menu {
-                Button("Code Block", systemImage: "curlybraces") { model.format(EditorActions.codeBlock) }
-                Button("Table", systemImage: "tablecells") { model.format(EditorActions.table) }
-                Button("Image", systemImage: "photo") { model.format { EditorActions.link($0, image: true) } }
-                Button("Horizontal Rule", systemImage: "minus") { model.format(EditorActions.horizontalRule) }
+                Button("Code Block", systemImage: "curlybraces") { model.format(.codeBlock, EditorActions.codeBlock) }
+                Button("Table", systemImage: "tablecells") { model.format(.table, EditorActions.table) }
+                Button("Image", systemImage: "photo") { model.format(.image) { EditorActions.link($0, image: true) } }
+                Button("Horizontal Rule", systemImage: "minus") { model.format(.horizontalRule, EditorActions.horizontalRule) }
             } label: {
                 Label("Insert", systemImage: "plus")
             }

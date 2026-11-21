@@ -83,6 +83,12 @@ body {
 .markdown-body > *:first-child { margin-top: 0 !important; }
 .markdown-body > *:last-child { margin-bottom: 0 !important; }
 
+/* Editing in the preview */
+.markdown-body[contenteditable="true"] { outline: none; cursor: text; min-height: calc(100vh - 80px); }
+.markdown-body[contenteditable="true"] [contenteditable="false"] { cursor: default; }
+.markdown-body[contenteditable="true"] input.task { cursor: pointer; }
+body.editable .markdown-body:empty::before { content: "Start writing…"; }
+
 /* Empty state */
 .markdown-body:empty::before {
   content: "Nothing to preview yet";

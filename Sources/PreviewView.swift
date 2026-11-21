@@ -8,6 +8,44 @@ struct PreviewView: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {}
 }
 
+/// The preview's web view. Undo and redo go to the editor's undo stack, so changes made in the
+/// preview and in the editor share one history, and leaving the preview commits pending edits.
+final class InkwellWebView: WKWebView {
+    var editorUndoManager: (() -> UndoManager?)?
+    var onResign: (() -> Void)?
+    /// WebKit's own typing undo would fight the editor's, so it gets a private, throwaway manager.
+    private let webKitUndo: UndoManager = {
+        let manager = UndoManager()
+        manager.levelsOfUndo = 1
+        return manager
+    }()
+
+    override var undoManager: UndoManager? { webKitUndo }
+
+    @objc func undo(_ sender: Any?) { editorUndoManager?()?.undo() }
+    @objc func redo(_ sender: Any?) { editorUndoManager?()?.redo() }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        let manager = editorUndoManager?()
+        switch item.action {
+        case #selector(undo(_:)):
+            (item as? NSMenuItem)?.title = manager?.undoMenuItemTitle ?? "Undo"
+            return manager?.canUndo ?? false
+        case #selector(redo(_:)):
+            (item as? NSMenuItem)?.title = manager?.redoMenuItemTitle ?? "Redo"
+            return manager?.canRedo ?? false
+        default:
+            return super.validateUserInterfaceItem(item)
+        }
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { onResign?() }
+        return resigned
+    }
+}
+
 /// Avoids the retain cycle WKUserContentController creates with its handlers.
 private final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
     weak var target: WKScriptMessageHandler?
@@ -21,12 +59,44 @@ struct PreviewOptions: Equatable {
     var font: String
     var fontSize: Double
     var width: Double
+    var editable: Bool
+}
+
+/// A formatting command applied to the editable preview.
+enum PreviewCommand {
+    case bold, italic, strike, highlight, code, link, image
+    case heading(Int)
+    case bulletList, numberedList, taskList, quote, codeBlock, table, horizontalRule
+
+    var name: String {
+        switch self {
+        case .bold: "bold"
+        case .italic: "italic"
+        case .strike: "strike"
+        case .highlight: "mark"
+        case .code: "code"
+        case .link: "link"
+        case .image: "image"
+        case .heading: "heading"
+        case .bulletList: "ul"
+        case .numberedList: "ol"
+        case .taskList: "task"
+        case .quote: "quote"
+        case .codeBlock: "codeblock"
+        case .table: "table"
+        case .horizontalRule: "hr"
+        }
+    }
 }
 
 @MainActor
 final class PreviewController: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
-    let webView: WKWebView
-    weak var model: WindowModel?
+    let webView: InkwellWebView
+    weak var model: WindowModel? {
+        didSet {
+            webView.editorUndoManager = { [weak self] in self?.model?.editor.textView?.undoManager }
+        }
+    }
 
     private var ready = false
     private var pendingRender: (markdown: String, base: String)?
@@ -42,9 +112,10 @@ final class PreviewController: NSObject, WKNavigationDelegate, WKScriptMessageHa
         let config = WKWebViewConfiguration()
         let content = WKUserContentController()
         config.userContentController = content
-        webView = WKWebView(frame: .zero, configuration: config)
+        webView = InkwellWebView(frame: .zero, configuration: config)
         super.init()
         content.add(WeakMessageHandler(self), name: "inkwell")
+        webView.onResign = { [weak self] in self?.commit() }
         webView.navigationDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
         webView.allowsMagnification = true
@@ -75,8 +146,56 @@ final class PreviewController: NSObject, WKNavigationDelegate, WKScriptMessageHa
         options = new
         guard ready else { return }
         webView.callAsyncJavaScript("Inkwell.setOptions(o)",
-                                    arguments: ["o": ["font": new.font, "fontSize": new.fontSize, "width": new.width]],
+                                    arguments: ["o": ["font": new.font, "fontSize": new.fontSize, "width": new.width,
+                                                      "editable": new.editable]],
                                     in: nil, in: .page, completionHandler: nil)
+    }
+
+    var isEditable: Bool { options?.editable ?? false }
+
+    /// Records text the preview already shows (because the user typed it there), so it isn't re-rendered.
+    func markRendered(_ markdown: String, base: String) {
+        lastRendered = (markdown, base)
+    }
+
+    /// Sends any pending preview edits to the editor and re-renders the cleaned-up result.
+    func commit() {
+        guard ready else { return }
+        webView.callAsyncJavaScript("Inkwell.commit()", arguments: [:], in: nil, in: .page, completionHandler: nil)
+    }
+
+    func run(_ command: PreviewCommand, argument: String? = nil) {
+        guard ready else { return }
+        var arg: Any = argument ?? NSNull()
+        if case .heading(let level) = command { arg = level }
+        webView.callAsyncJavaScript("Inkwell.command(name, arg)", arguments: ["name": command.name, "arg": arg],
+                                    in: nil, in: .page, completionHandler: nil)
+    }
+
+    /// Remembers the preview's selection (before a sheet takes focus) and returns the selected text.
+    func saveSelection() async -> String? {
+        guard ready else { return nil }
+        return try? await webView.callAsyncJavaScript("return Inkwell.saveSelection()", contentWorld: .page) as? String
+    }
+
+    func selectedText() async -> String {
+        guard ready else { return "" }
+        let text = try? await webView.callAsyncJavaScript("return window.getSelection().toString()", contentWorld: .page)
+        return text as? String ?? ""
+    }
+
+    func countMatches(_ query: String) async -> Int {
+        guard ready else { return 0 }
+        let n = try? await webView.callAsyncJavaScript("return Inkwell.countMatches(q)", arguments: ["q": query],
+                                                       contentWorld: .page)
+        return (n as? NSNumber)?.intValue ?? 0
+    }
+
+    /// Prepares a new search to start at the current match rather than after it.
+    func collapseSelectionToStart() async {
+        guard ready else { return }
+        _ = try? await webView.callAsyncJavaScript(
+            "const s = window.getSelection(); if (s.rangeCount) s.collapseToStart();", contentWorld: .page)
     }
 
     func syncScroll(topLine: Double, totalLines: Int, headingLines: [Int], atBottom: Bool) {
@@ -121,6 +240,12 @@ final class PreviewController: NSObject, WKNavigationDelegate, WKScriptMessageHa
             if let href = body["href"] as? String { open(href) }
         case "task":
             if let index = body["index"] as? Int { model?.toggleTask(index: index) }
+        case "edit":
+            if let text = body["text"] as? String { model?.applyPreviewEdit(text) }
+        case "undo":
+            model?.editor.textView?.undoManager?.undo()
+        case "redo":
+            model?.editor.textView?.undoManager?.redo()
         default:
             break
         }

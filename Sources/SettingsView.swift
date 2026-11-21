@@ -13,6 +13,7 @@ struct SettingsView: View {
     @AppStorage(Prefs.appearance) private var appearance = "system"
     @AppStorage(Prefs.showSidebar) private var showSidebar = true
     @AppStorage(Prefs.openInTabs) private var openInTabs = true
+    @AppStorage(Prefs.editablePreview) private var editablePreview = true
 
     @State private var isDefault = DefaultApp.isDefault
     @State private var settingDefault = false
@@ -80,6 +81,8 @@ struct SettingsView: View {
                         .frame(width: 60, alignment: .trailing)
                 }
                 Toggle("Sync scrolling with editor", isOn: $syncScroll)
+                Toggle("Edit directly in the preview", isOn: $editablePreview)
+                    .help("Type in the preview like a word processor; changes are written back as Markdown.")
             }
         }
         .formStyle(.grouped)

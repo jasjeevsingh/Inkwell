@@ -7,6 +7,7 @@ A lightweight, native Markdown editor and viewer for macOS (SwiftUI + AppKit, ~8
 ## Features
 
 - **Three views:** Editor, Split (live preview), or Preview only. Switch with ⌘1 / ⌘2 / ⌘3.
+- **Edit in the preview, too:** type directly in the rendered preview like a word processor, and Inkwell writes your changes back as clean Markdown in the editor. Only the blocks you touch are rewritten, so the rest of the file keeps its exact formatting. Formatting shortcuts (⌘B, ⌘I, headings, lists, links…) work on whichever side you're in, undo is shared between both sides, and ⌘-click opens a link while editing. Turn it off in Settings → Preview if you'd rather keep the preview read-only.
 - **Syntax-highlighted editor:** headings, emphasis, links, code, and lists are styled as you type, and the Markdown symbols are dimmed.
 - **Polished preview:** GitHub-flavored Markdown with tables, task lists, footnotes, `> [!NOTE]` alerts, front matter, and ==highlights==.
 - **Code highlighting** for about 40 languages, with a Copy button on each code block.
@@ -24,7 +25,8 @@ A lightweight, native Markdown editor and viewer for macOS (SwiftUI + AppKit, ~8
 - **Smart editing:** Return continues lists, quotes, and task lists, and Return on an empty item ends the list. Tab / ⇧Tab indent and outdent list items. Typing `*`, `_`, `` ` ``, `~`, `(`, or `[` with text selected wraps the selection. Pasting a URL over selected text makes a link.
 - **Drag and drop** files or images into the editor to insert links with relative paths.
 - **Export** to HTML (⇧⌘E) or PDF (⌥⌘E), Print (⌘P), and Copy as HTML (⌥⇧⌘C).
-- **Find and replace** (⌘F), word count, reading time, and cursor position.
+- **Find** (⌘F) in both the editor and the preview, with Find Next / Previous (⌘G / ⇧⌘G) and Use Selection for Find (⌘E). Find and Replace (⌥⌘F) works in the editor.
+- **Word count**, reading time, and cursor position.
 - **Light and dark mode**, plus a choice of editor and preview fonts, sizes, and widths. Zoom with ⌘= / ⌘- / ⌘0.
 - **Auto-save**, version history (File → Revert To), and automatic reload when the file changes on disk.
 
